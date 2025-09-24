@@ -101,8 +101,12 @@ resource "aws_instance" "harbor_ec2" {
   subnet_id     = aws_subnet.harbor_subnet.id
   vpc_security_group_ids = [aws_security_group.harbor_sg.id]
   key_name      = var.key_name
-
   associate_public_ip_address = true
+  root_block_device {
+    volume_size = 40       # 40 GB
+    volume_type = "gp3"    # General Purpose SSD (gp3 is cheaper than gp2)
+    encrypted   = true     # always encrypt in production
+  }
 
   user_data = <<-EOF
               #!/bin/bash
