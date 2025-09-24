@@ -19,3 +19,9 @@ variable "vpc_cidr" {
 variable "subnet_cidr" {
   default = "10.0.1.0/24"
 }
+
+variable "harbor_admin_password" {
+  description = "Admin password for Harbor UI"
+  type        = string
+  sensitive   = true
+}
