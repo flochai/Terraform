@@ -94,30 +94,65 @@ resource "aws_security_group" "harbor_sg" {
 
 # ----------Compute----------
 
-# EC2 Instance
 resource "aws_instance" "harbor_ec2" {
   ami           = data.aws_ssm_parameter.ubuntu_2204.value
   instance_type = var.instance_type
   subnet_id     = aws_subnet.harbor_subnet.id
   vpc_security_group_ids = [aws_security_group.harbor_sg.id]
   key_name      = var.key_name
+
   associate_public_ip_address = true
+
   root_block_device {
-    volume_size = 40       # 40 GB
-    volume_type = "gp3"    # General Purpose SSD (gp3 is cheaper than gp2)
-    encrypted   = true     # always encrypt in production
+    volume_size = 8
+    volume_type = "gp3"
+    encrypted   = true
   }
 
   user_data = <<-EOF
               #!/bin/bash
+              set -euo pipefail
+
+              DOMAIN="harbor.flochai.com"
+
+              # Update & install dependencies
               apt-get update -y
               apt-get upgrade -y
-              apt-get install -y docker.io docker-compose wget
+              apt-get install -y docker.io docker-compose wget certbot
+
               systemctl enable --now docker
 
+              # Prepare Harbor data volume (/dev/sdf → /data)
+              mkfs -t ext4 /dev/sdf
+              mkdir -p /data
+              echo "/dev/sdf /data ext4 defaults,nofail 0 2" >> /etc/fstab
+              mount -a
+
               # Download Harbor installer
-              wget https://github.com/goharbor/harbor/releases/download/v2.11.0/harbor-online-installer-v2.11.0.tgz -P /opt
-              tar -xvf /opt/harbor-online-installer-v2.11.0.tgz -C /opt
+              HARBOR_VERSION=v2.11.0
+              wget https://github.com/goharbor/harbor/releases/download/$HARBOR_VERSION/harbor-online-installer-$HARBOR_VERSION.tgz -P /opt
+              tar -xvf /opt/harbor-online-installer-$HARBOR_VERSION.tgz -C /opt
+              cd /opt/harbor
+
+              # Request Let's Encrypt cert
+              certbot certonly --standalone --non-interactive --agree-tos \
+                -m admin@$DOMAIN -d $DOMAIN
+
+              # Generate minimal harbor.yml
+              cat > harbor.yml <<HARBORCFG
+hostname: $DOMAIN
+http:
+  port: 80
+https:
+  port: 443
+  certificate: /etc/letsencrypt/live/$DOMAIN/fullchain.pem
+  private_key: /etc/letsencrypt/live/$DOMAIN/privkey.pem
+harbor_admin_password: "Admin12345"
+data_volume: /data
+HARBORCFG
+
+              # Install Harbor with Trivy + Notary
+              ./install.sh --with-trivy --with-notary
               EOF
 
   tags = {
@@ -125,8 +160,13 @@ resource "aws_instance" "harbor_ec2" {
   }
 }
 
-# Elastic IP
-resource "aws_eip" "harbor_eip" {
-  instance = aws_instance.harbor_ec2.id
-  vpc      = true
+#Get EIP from Account
+data "aws_eip" "harbor_eip" {
+  id = "eipalloc-0f6bfd05edf4d7418"
+}
+
+# Attach EIP
+resource "aws_eip_association" "harbor_eip_assoc" {
+  instance_id   = aws_instance.harbor_ec2.id
+  allocation_id = aws_eip.harbor_eip.id
 }
