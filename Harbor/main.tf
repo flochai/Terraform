@@ -114,6 +114,7 @@ resource "aws_instance" "harbor_ec2" {
               set -euo pipefail
 
               DOMAIN="harbor.flochai.com"
+              HARBOR_ADMIN_PASS="${var.harbor_admin_password}"
 
               # Update & install dependencies
               apt-get update -y
@@ -147,7 +148,7 @@ https:
   port: 443
   certificate: /etc/letsencrypt/live/$DOMAIN/fullchain.pem
   private_key: /etc/letsencrypt/live/$DOMAIN/privkey.pem
-harbor_admin_password: "Admin12345"
+harbor_admin_password: "$HARBOR_ADMIN_PASS"
 data_volume: /data
 HARBORCFG
 
