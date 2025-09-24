@@ -8,6 +8,7 @@ data "aws_ssm_parameter" "ubuntu_2204" {
 
 output "ubuntu_ami_id" {
   value = data.aws_ssm_parameter.ubuntu_2204.value
+  sensitive = true
 }
 
 # ----------Networking----------
@@ -130,59 +131,51 @@ resource "aws_instance" "harbor_ec2" {
     encrypted   = true
   }
 
-  user_data = <<-EOF
-              #!/bin/bash
-              set -euo pipefail
+  user_data = <<EOF
+#!/bin/bash
+set -euo pipefail
+exec > >(tee /var/log/user-data-run.log | logger -t user-data -s 2>/dev/console) 2>&1
 
-              DOMAIN="harbor.flochai.com"
-              HARBOR_ADMIN_PASS="${var.harbor_admin_password}"
+DOMAIN="harbor.flochai.com"
+HARBOR_ADMIN_PASS="${var.harbor_admin_password}"
+export DEBIAN_FRONTEND=noninteractive
 
-              # Update & install dependencies
-              apt-get update -y
-              apt-get upgrade -y
-              apt-get install -y docker.io docker-compose wget certbot
+apt-get update -y
+apt-get upgrade -y
+apt-get install -y docker.io docker-compose wget certbot jq dnsutils
+systemctl enable --now docker
 
-              systemctl enable --now docker
+DATADISK=$(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v nvme0n1 | head -n1 || true)
+if [ -n "$${DATADISK:-}" ]; then
+  mkfs.ext4 -F /dev/"$DATADISK"
+  mkdir -p /data
+  echo "/dev/$DATADISK /data ext4 defaults,nofail 0 2" >> /etc/fstab
+  mount -a
+else
+  echo "WARN: No extra data disk found; skipping /data"
+fi
 
-              # Prepare Harbor data volume (/dev/sdf → /data)
-              DATADISK=$(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v nvme0n1 | head -n1 || true)
-              if [ -n "$${DATADISK:-}" ]; then
-              mkfs.ext4 -F /dev/"$DATADISK"
-              mkdir -p /data
-              echo "/dev/$DATADISK /data ext4 defaults,nofail 0 2" >> /etc/fstab
-              mount -a
-              else
-              echo "WARN: No extra data disk found; skipping /data"
-              fi
+PUBIP=$(curl -s http://169.254.169.254/latest/meta-data/public-ipv4 || true)
+for i in $(seq 1 60); do
+  host -t A "$DOMAIN" | grep -q "$PUBIP" && break
+  echo "Waiting for DNS $DOMAIN -> $PUBIP ($i/60)"; sleep 5
+done
 
-              # Download Harbor installer
-              HARBOR_VERSION=v2.11.0
-              wget https://github.com/goharbor/harbor/releases/download/$HARBOR_VERSION/harbor-online-installer-$HARBOR_VERSION.tgz -P /opt
-              tar -xvf /opt/harbor-online-installer-$HARBOR_VERSION.tgz -C /opt
-              cd /opt/harbor
+HARBOR_VERSION=v2.11.0
+wget -q "https://github.com/goharbor/harbor/releases/download/$HARBOR_VERSION/harbor-online-installer-$HARBOR_VERSION.tgz" -P /opt
+tar -xzf /opt/harbor-online-installer-$HARBOR_VERSION.tgz -C /opt
+cd /opt/harbor
 
-              # Request Let's Encrypt cert
-              certbot certonly --standalone --non-interactive --agree-tos \
-                -m admin@$DOMAIN -d $DOMAIN
+certbot certonly --standalone --non-interactive --agree-tos -m admin@"$DOMAIN" -d "$DOMAIN"
 
-              # Generate minimal harbor.yml
-              cat > harbor.yml <<HARBORCFG
-hostname: $DOMAIN
-http:
-  port: 80
-https:
-  port: 443
-  certificate: /etc/letsencrypt/live/$DOMAIN/fullchain.pem
-  private_key: /etc/letsencrypt/live/$DOMAIN/privkey.pem
-harbor_admin_password: "$HARBOR_ADMIN_PASS"
-data_volume: /data
-HARBORCFG
+sudo mv harbor.yml.tmpl harbor.yml
+sed -i 's/hostname: .*/hostname: harbor.flochai.com/' harbor.yml
+sed -i 's/certificate: .*/certificate:/etc/letsencrypt/live/harbor.flochai.com/fullchain.pem/' harbor.yml
+sed -i 's/private_key: .*/private_key: /etc/letsencrypt/live/harbor.flochai.com/privkey.pem' harbor.yml
 
-              # Install Harbor with Trivy + Notary
-              ./install.sh --with-trivy --with-notary
-              EOF
-
-  tags = {
+./install.sh --with-trivy
+EOF
+               tags = {
     Name = "harbor-ec2"
   }
 }
