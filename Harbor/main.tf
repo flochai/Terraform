@@ -92,6 +92,27 @@ resource "aws_security_group" "harbor_sg" {
   }
 }
 
+# ----------EBS /data----------
+
+# 40 GB EBS volume for Harbor data
+resource "aws_ebs_volume" "harbor_data" {
+  availability_zone = aws_instance.harbor_ec2.availability_zone
+  size              = 40
+  type              = "gp3"
+  encrypted         = true
+
+  tags = {
+    Name = "harbor-data"
+  }
+}
+
+# Attach the volume to your EC2 instance
+resource "aws_volume_attachment" "harbor_data_attach" {
+  device_name = "/dev/sdf"
+  volume_id   = aws_ebs_volume.harbor_data.id
+  instance_id = aws_instance.harbor_ec2.id
+}
+
 # ----------Compute----------
 
 resource "aws_instance" "harbor_ec2" {
@@ -124,10 +145,15 @@ resource "aws_instance" "harbor_ec2" {
               systemctl enable --now docker
 
               # Prepare Harbor data volume (/dev/sdf → /data)
-              mkfs -t ext4 /dev/sdf
+              DATADISK=$(lsblk -dn -o NAME,TYPE | awk '$2=="disk"{print $1}' | grep -v nvme0n1 | head -n1 || true)
+              if [ -n "$${DATADISK:-}" ]; then
+              mkfs.ext4 -F /dev/"$DATADISK"
               mkdir -p /data
-              echo "/dev/sdf /data ext4 defaults,nofail 0 2" >> /etc/fstab
+              echo "/dev/$DATADISK /data ext4 defaults,nofail 0 2" >> /etc/fstab
               mount -a
+              else
+              echo "WARN: No extra data disk found; skipping /data"
+              fi
 
               # Download Harbor installer
               HARBOR_VERSION=v2.11.0
@@ -169,5 +195,5 @@ data "aws_eip" "harbor_eip" {
 # Attach EIP
 resource "aws_eip_association" "harbor_eip_assoc" {
   instance_id   = aws_instance.harbor_ec2.id
-  allocation_id = aws_eip.harbor_eip.id
+  allocation_id = data.aws_eip.harbor_eip.id
 }
