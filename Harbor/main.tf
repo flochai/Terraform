@@ -168,10 +168,11 @@ cd /opt/harbor
 
 certbot certonly --standalone --non-interactive --agree-tos -m admin@"$DOMAIN" -d "$DOMAIN"
 
-sudo mv harbor.yml.tmpl harbor.yml
-sed -i 's/hostname: .*/hostname: $DOMAIN/' harbor.yml
-sed -i 's|certificate: .*|certificate: /etc/letsencrypt/live/$DOMAIN/fullchain.pem/|' harbor.yml
-sed -i 's|private_key: .*|private_key: /etc/letsencrypt/live/$DOMAIN/privkey.pem|' harbor.yml
+sudo -i
+mv harbor.yml.tmpl harbor.yml
+sed -i 's/hostname: .*/hostname: harbor.flochai.com/' harbor.yml
+sed -i 's|certificate: .*|certificate: /etc/letsencrypt/live/harbor.flochai.com/fullchain.pem/|' harbor.yml
+sed -i 's|private_key: .*|private_key: /etc/letsencrypt/live/harbor.flochai.com/privkey.pem|' harbor.yml
 
 sudo ./install.sh --with-trivy
 EOF
