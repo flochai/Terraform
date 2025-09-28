@@ -103,42 +103,49 @@ resource "aws_instance" "k3s_ec2" {
     encrypted   = true
   }
 
-  user_data = <<EOF
+user_data = <<EOF
 #!/bin/bash
 set -euo pipefail
 exec > >(tee /var/log/user-data-run.log | logger -t user-data -s 2>/dev/console) 2>&1
 
 # baseline
-sudo apt-get update -y && sudo apt-get upgrade -y
-sudo apt-get install -y curl git jq btop
+apt-get update -y && apt-get upgrade -y
+apt-get install -y curl git jq btop wget
 
-# installs k3s server with embedded etcd and a serviceloadbalancer
+# install k3s server with embedded etcd and servicelb
 curl -sfL https://get.k3s.io | INSTALL_K3S_EXEC="--write-kubeconfig-mode 644" sh -
 
-# create namespace
-kubectl create namespace argocd
+# wait until k3s is up
+sleep 30
 
-# install core
-kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
+# kubeconfig for ubuntu user
+mkdir -p /home/ubuntu/.kube
+cp /etc/rancher/k3s/k3s.yaml /home/ubuntu/.kube/config
+chown ubuntu:ubuntu /home/ubuntu/.kube/config
+chmod 600 /home/ubuntu/.kube/config
 
-# Helm
+# install Helm
 curl -fsSL https://raw.githubusercontent.com/helm/helm/main/scripts/get-helm-3 | bash
 
-# Download K9s
-sudo wget https://github.com/derailed/k9s/releases/download/v0.50.13/k9s_linux_amd64.deb
+# create namespace for argocd
+kubectl create namespace argocd
 
-# Install
-sudo apt install ./k9s_linux_amd64.deb
+# install Argo CD core
+kubectl apply -n argocd -f https://raw.githubusercontent.com/argoproj/argo-cd/stable/manifests/install.yaml
 
-# kubeconfig
-sudo cat /etc/rancher/k3s/k3s.yaml > ~/.kube/config
-chmod 600 ~/.kube/config
-# (optional) if connecting from your laptop, replace 127.0.0.1 by your EC2 public IP in this file.
-
-# cert-manager (for real TLS later with DNS/HTTP solvers)
+# install cert-manager
 kubectl apply -f https://github.com/cert-manager/cert-manager/releases/download/v1.15.3/cert-manager.yaml
 
+# download and install K9s
+cd /home/ubuntu
+wget https://github.com/derailed/k9s/releases/download/v0.50.13/k9s_linux_amd64.deb
+apt install -y ./k9s_linux_amd64.deb
+chown ubuntu:ubuntu /home/ubuntu/k9s_linux_amd64.deb
+
+# mark done
+touch /var/log/user-data-done
 EOF
+
                tags = {
     Name = "k3s-ec2"
   }
